@@ -1,2 +1,2 @@
 # steam-free-apps
-Periodically request free apps on steam to be added to your account
+A NodeJS application used to periodically request free apps on steam to be added to your account
