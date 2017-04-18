@@ -28,7 +28,7 @@ SteamAuth.Sync(function(error) {
         console.log(logDate(), error);
     var auth = new SteamAuth(winauth);
     auth.once("ready", function() {
-        steamcred.authCode = steamcred.twoFactorCode = auth.calculateCode(); ,
+        steamcred.authCode = steamcred.twoFactorCode = auth.calculateCode();
         steamcred.rememberPassword = true;
         client.logOn(steamcred);
         client.on("loggedOn", function(response) {
