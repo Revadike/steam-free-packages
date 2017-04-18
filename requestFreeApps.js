@@ -3,7 +3,7 @@ var steamcred = {
     "accountName": "YOUR_STEAM_USERNAME",
     "password": "YOUR_STEAM_PASSWORD"
 },
-winauth = { //For now only support winauth, sorry
+winauth = { //For now only support winauth, sorry. Feel free to modify to suit your own authenication method.
     deviceid: "YOUR_WINAUTH_DEVICEID",
     shared_secret: "YOUR_WINAUTH_SHARED_SECRET",
     identity_secret: "YOUR_WINAUTH_IDENTITY_SECRET"
@@ -13,7 +13,6 @@ steamdbcookie = "YOUR_STEAMDB_COOKIE";
 //CODE
 var SteamAuth = require("steamauth"),
     SteamUser = require("steam-user"),
-    Clipboard = require("copy-paste"),
     jsdom = require("jsdom"),
     $ = require("jquery")(jsdom.jsdom().defaultView),
     request = require("request"),
