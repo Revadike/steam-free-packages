@@ -1,5 +1,5 @@
 @ECHO OFF
-npm install steamauth
+npm install git+https://github.com/winauth/SteamAuth.git
 npm install steam-user
 npm install steamcommunity
 npm install jsdom
