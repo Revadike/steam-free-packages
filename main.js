@@ -176,7 +176,7 @@ function requestFreeSubs(unownedFreeSubs) {
                 }
                 console.log("Waiting " + millisecondsToStr(config.delay) + " for a new attempt");
                 setTimeout(function() {
-                    requestFreeApps(client, unownedFreeSubs)
+                    requestFreeSubs(client, unownedFreeSubs)
                 }, config.delay);
             }
         });
