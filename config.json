@@ -8,7 +8,5 @@
         "deviceid": "IF_USAGE_YOUR_WINAUTH_DEVICE_ID",
         "shared_secret": "IF_USAGE_YOUR_WINAUTH_SHARED_SECRET",
         "identity_secret": "IF_USAGE_YOUR_WINAUTH_IDENTITY_SECRET"
-    },
-    "delay": 1800000,
-    "max_subs": 50
+    }
 }
