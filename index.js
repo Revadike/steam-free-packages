@@ -1,165 +1,187 @@
-const SteamUser = require("steam-user"),
-    SteamAuth = require("steamauth"),
-    util = require("util"),
-    fs = require("fs");
-var logStream = fs.createWriteStream("log.txt", { "flags": "a" });
-var log = console.log;
-console.log = function() {
-    var first_parameter = arguments[0];
-    var other_parameters = Array.prototype.slice.call(arguments, 1);
+'use strict';
 
-    function formatConsoleDate(date) {
-        var day = date.getDate();
-        var month = date.getMonth() + 1;
-        var year = date.getFullYear();
-        var hour = date.getHours();
-        var minutes = date.getMinutes();
-        var seconds = date.getSeconds();
-        var milliseconds = date.getMilliseconds();
-        return "[" + ((day < 10) ? "0" + day : day) +
-            "-" + ((month < 10) ? "0" + month : month) +
-            "-" + ((year < 10) ? "0" + year : year) +
-            " " + ((hour < 10) ? "0" + hour : hour) +
-            ":" + ((minutes < 10) ? "0" + minutes : minutes) +
-            ":" + ((seconds < 10) ? "0" + seconds : seconds) +
-            "." + ("00" + milliseconds).slice(-3) + "] ";
+global._mckay_statistics_opt_out = true;
+
+const SteamAuth = require('steamauth');
+const SteamUser = require('steam-user');
+const util = require('util');
+const fs = require('fsxt');
+const request = require('request-promise-any');
+
+var logStream = fs.createWriteStream('log.txt', {
+  'flags': 'a'
+});
+logStream.write('\r\n--- Beginning of stream ' + new Date() + '---\r\n');
+
+function unzip(arr) {
+  const elements = arr.length;
+  const len = arr[0].length;
+  const final = [];
+
+  for (let i = 0; i < len; i++) {
+    const temp = [];
+    for (let j = 0; j < elements; j++) {
+      temp.push(arr[j][i]);
     }
-    var tolog = [formatConsoleDate(new Date()), first_parameter].concat(other_parameters);
-    var str = "";
-    tolog.forEach(function(arg) {
-        str += (typeof arg === "string" ? arg : util.inspect(arg, false, null)) + " ";
-    });
-    str.slice(0, -1);
-    logStream.write(str + "\r\n");
-    log.apply(console, [str]);
-};
+    final.push(temp);
+  }
 
-const config = JSON.parse(fs.readFileSync("config.json"));
+  return final;
+}
+
+function secsNow() {
+  return Math.round(Date.now() / 1000);
+}
+
+function formatConsoleDate(date = new Date()) {
+  const hour = date.getHours();
+  const minutes = date.getMinutes();
+  const seconds = date.getSeconds();
+  return '[' + ((hour < 10) ? '0' + hour : hour) +
+    ':' + ((minutes < 10) ? '0' + minutes : minutes) +
+    ':' + ((seconds < 10) ? '0' + seconds : seconds) + ']';
+}
+
+function log(first, ...others) {
+  var tolog = [formatConsoleDate(), first, ...others];
+  var strs = [];
+  tolog.forEach(arg => {
+    strs.push((typeof arg === 'string' ? arg : util.inspect(arg, false, null)));
+  });
+  const out = strs.join(' ');
+  logStream.write(out + '\r\n');
+  console.log(out);
+}
+
+const {steamCredentials, useWinauth, winauthCredentials} = fs.readJsonSync('config.json');
 const client = new SteamUser({
-    enablePicsCache: true,
-    changelistUpdateInterval: 200,
-    picsCacheAll: true
+  enablePicsCache: true,
+  changelistUpdateInterval: 200,
+  picsCacheAll: true
 });
 
-var ownedPackages = [],
-    fodQueue = [],
-    fodRequested = 0,
-    mycountry = "US";
+const owned = new Set();
+const fodQueue = []; // can't be Set since you can't pop a Set
+let mycountry = 'US';
 
-setInterval(function() {
-    fodRequested = 0;
-    if (fodQueue.length > 0) {
-        for (var i = 0; i < fodQueue.length && i <= 50; i++) {
-            requestFreeSub(fodQueue.pop());
-        }
+async function runFreeSubs() {
+  const startTime = new Date().getTime();
+  const len = fodQueue.length;
+  if (len > 0) {
+    for (let i = 0; i < len && i <= 50; i++) {
+      await requestFreeSub(fodQueue.pop());
     }
-}, 3600000);
+  }
+  const endTime = new Date().getTime();
+  setTimeout(runFreeSubs, 3600000 - Math.max(0, endTime - startTime));
+}
+// no need - is ran on logon
+//setTimeout(runFreeSubs, 3600000);
 
-if (config.winauth_usage) {
-    const SteamAuth = require("steamauth");
-    SteamAuth.Sync(function(error) {
-        if (error) console.log(error);
-        var auth = new SteamAuth(config.winauth_data);
-        auth.once("ready", function() {
-            config.steam_credentials.twoFactorCode = auth.calculateCode();
-            steamLogin();
-        });
+if (useWinauth) {
+  SteamAuth.Sync(error => {
+    if (error) {
+      log('Winauth Authentication failed!');
+      log(error);
+      process.exit(1);
+    }
+    const auth = new SteamAuth(winauthCredentials);
+    auth.once('ready', () => {
+      steamCredentials.twoFactorCode = auth.calculateCode();
+      steamLogin();
     });
+  });
 } else {
-    steamLogin();
+  steamLogin();
 }
 
 function steamLogin() {
-    config.steam_credentials.rememberPassword = true;
-    config.steam_credentials.logonID = Date.now();
-    client.logOn(config.steam_credentials);
-    client.on("loggedOn", function(response) {
-        console.log("Logged into Steam as " + client.steamID.getSteam3RenderedID());
+  steamCredentials.rememberPassword = true;
+  steamCredentials.logonID = Date.now();
+  client.logOn(steamCredentials);
+  client.on('loggedOn', () => {
+    log('Logged into Steam as ' + client.steamID.getSteam3RenderedID());
+    runFreeSubs();
+  });
+  client.on('error', error => {
+    log(error);
+  });
+  client.on('accountInfo', (_, country) => {
+    mycountry = country;
+  });
+
+  // Emitted when a package that was already in our cache updates.
+  // The picsCache property is updated after this is emitted, so you can get the previous package data via picsCache.packages[packageid].
+  //
+  // according to https://github.com/DoctorMcKay/node-steam-user/blob/dbaaac411f704358ef33ef796d7e9df2d4da5282/components/apps.js#L179
+  // this *is* emitted when a new package is found so yeah
+  client.on('packageUpdate', (packageId, data) => {
+    log('Received PICS Update for Package ' + packageId);
+    log(data);
+
+    if (owned.has(packageId)) return;
+    if (fodQueue.includes(packageId)) return;
+
+    const pkg = data.packageinfo;
+
+    if (pkg.licensetype !== 1) return; // Single Purchase
+    if (pkg.status !== 0) return; // Available
+    if (pkg.billingtype !== 12 && pkg.billingtype !== 0) return; // NoCost or FreeOnDemand
+    if (pkg.extended.purchaserestrictedcountries && pkg.extended.purchaserestrictedcountries.includes(mycountry)) return;
+    if (pkg.ExpiryTime && pkg.ExpiryTime <= secsNow()) return;
+    if (pkg.StartTime && pkg.StartTime >= secsNow()) return;
+    if (pkg.DontGrantIfAppIDOwned && client.ownsApp(pkg.DontGrantIfAppIDOwned)) return;
+    if (pkg.RequiredAppID && !client.ownsApp(pkg.RequiredAppID)) return;
+
+    fodQueue.push(packageId);
+  });
+
+  // Contains the license data for the packages which your Steam account owns. To see license object structure, see CMsgClientLicenseList.License.
+  // Emitted on logon and when licenses change. The licenses property will be updated after this event is emitted.
+  client.on('licenses', licenses => {
+    log('Our account owns ' + licenses.length + ' license(s)');
+    for (let license of licenses) {
+      owned.add(license.package_id);
+    }
+  });
+
+  // do stuff with picsCache???
+  /*setTimeout(async function _f() {
+    log('Begin request freepackages info');
+    const body = await request('https://steamdb.info/freepackages/');
+
+    const re       = /data-subid="([0-9]+)" data-appid="([0-9]+)"/g;
+    const reSingle = /data-subid="([0-9]+)" data-appid="([0-9]+)"/;
+    const packagesApps = unzip(body.match(re).map(e => e.match(reSingle).slice(1)));
+    client.getProductInfo(packagesApps[1], packagesApps[0], false, () => {
+      log('PICS update should go out now!');
+
+      setTimeout(_f, 10000);
     });
-    client.on("error", function(error) {
-        console.log(error);
-    });
-    client.on("accountInfo", function(name, country) {
-        mycountry = country;
-    });
-    client.on("packageUpdate", function(packageid, data) {
-        console.log("Received PICS Update for Package " + packageid);
-        console.log(JSON.stringify(data, null, 4));
-        if (!ownedPackages.includes(packageid) &&
-            data.packageinfo.licensetype === 1 && // Single Purchase
-            data.packageinfo.status === 0 && // Available
-            (data.packageinfo.billingtype === 12 || data.packageinfo.billingtype === 0) && // NoCost or FreeOnDemand
-            (data.packageinfo.extended.purchaserestrictedcountries ? !data.packageinfo.extended.purchaserestrictedcountries.includes(mycountry) : true) &&
-            (data.packageinfo.ExpiryTime ? data.packageinfo.ExpiryTime > Math.round(Date.now() / 1000) : true) &&
-            (data.packageinfo.StartTime ? data.packageinfo.StartTime < Math.round(Date.now() / 1000) : true) &&
-            (data.packageinfo.DontGrantIfAppIDOwned ? !client.ownsApp(data.packageinfo.DontGrantIfAppIDOwned) : true) &&
-            (data.packageinfo.RequiredAppID ? client.ownsApp(data.packageinfo.RequiredAppID) : true)) {
-            if (fodRequested <= 50) {
-                requestFreeSub(packageid);
-            } else {
-                fodQueue.push(packageid);
-            }
+  }, 10000);*/
+}
+
+function requestFreeSub(pkg) {
+  return new Promise(resolve => {
+    log('Attempting to request package id ' + pkg);
+    client.requestFreeLicense(pkg, (error, granted, grantedAppIDs) => {
+      if (error) {
+        log(error);
+      }
+      if (granted.length === 0) {
+        log('No new packages were granted to our account');
+      } else {
+        log(granted.length + ' New package(s) (' + granted.join(',') + ') were successfully granted to our account');
+        for (let g of granted) {
+          owned.add(g);
         }
+      }
+      if (grantedAppIDs.length === 0) {
+        log('No new apps were granted to our account');
+      } else {
+        log(grantedAppIDs.length + ' New app(s) (' + grantedAppIDs.join(',') + ') were successfully granted to our account');
+      }
+      resolve();
     });
-    client.on("licenses", function(licenses) {
-        console.log("Our account owns " + licenses.length + " license" + numberEnding(licenses.length));
-        licenses.forEach(function(license) {
-            if (!ownedPackages.includes(license.package_id)) {
-                ownedPackages.push(license.package_id);
-            }
-        });
-    });
-}
-
-function requestFreeSub(packageid) {
-    console.log("Attempting to request package id " + packageid);
-    fodRequested++;
-    client.requestFreeLicense(packageid, function(error, grantedPackages, grantedAppIDs) {
-        if (error) {
-            console.log(error)
-        } else {
-            if (grantedPackages.length === 0) {
-                console.log("No new packages were granted to our account");
-            } else {
-                console.log(grantedPackages.length + " New package" + numberEnding(grantedPackages.length) + " (" + grantedPackages.join() + ") were successfully granted to our account");
-                if (!ownedPackages.includes(packageid) && grantedPackages.includes(packageid)) {
-                    ownedPackages.push(packageid);
-                }
-            }
-            if (grantedAppIDs.length === 0) {
-                console.log("No new apps were granted to our account");
-            } else {
-                console.log(grantedAppIDs.length + " New app" + numberEnding(grantedAppIDs.length) + " (" + grantedAppIDs.join() + ") were successfully granted to our account");
-            }
-        }
-    });
-}
-
-function millisecondsToStr(milliseconds) {
-    var temp = Math.floor(milliseconds / 1000);
-    var years = Math.floor(temp / 31536000);
-    if (years) {
-        return years + " year" + numberEnding(years);
-    }
-    var days = Math.floor((temp %= 31536000) / 86400);
-    if (days) {
-        return days + " day" + numberEnding(days);
-    }
-    var hours = Math.floor((temp %= 86400) / 3600);
-    if (hours) {
-        return hours + " hour" + numberEnding(hours);
-    }
-    var minutes = Math.floor((temp %= 3600) / 60);
-    if (minutes) {
-        return minutes + " minute" + numberEnding(minutes);
-    }
-    var seconds = temp % 60;
-    if (seconds) {
-        return seconds + " second" + numberEnding(seconds);
-    }
-    return "less than a second";
-}
-
-function numberEnding(number) {
-    return (number > 1) ? "s" : "";
+  });
 }

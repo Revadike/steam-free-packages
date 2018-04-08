@@ -1,0 +1,12 @@
+{
+    "steamCredentials": {
+        "accountName": "your username",
+        "password": "your password"
+    },
+    "useWinauth": false,
+    "winauthCredentials": {
+        "deviceid": "IF_USAGE_YOUR_WINAUTH_DEVICE_ID",
+        "sharedSecret": "IF_USAGE_YOUR_WINAUTH_SHARED_SECRET",
+        "identitySecret": "IF_USAGE_YOUR_WINAUTH_IDENTITY_SECRET"
+    }
+}
