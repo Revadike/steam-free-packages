@@ -1,7 +1,9 @@
 const SteamUser = require("steam-user"),
     SteamAuth = require("steamauth"),
     util = require("util"),
-    fs = require("fs");
+    fs = require("fs"),
+    SteamStore = require('steam-store');
+
 var logStream = fs.createWriteStream("log.txt", { "flags": "a" });
 var log = console.log;
 console.log = function() {
@@ -40,11 +42,16 @@ const client = new SteamUser({
     changelistUpdateInterval: 200,
     picsCacheAll: true
 });
+const store = new SteamStore({
+  country:  'DE',
+  language: 'en'
+});
 
 var ownedPackages = [],
     fodQueue = [],
     fodRequested = 0,
-    mycountry = "US";
+    mycountry = "US",
+    genres = ['Free to Play', 'genre_demos'];
 
 setInterval(function() {
     fodRequested = 0;
@@ -73,18 +80,40 @@ function steamLogin() {
     config.steam_credentials.rememberPassword = true;
     config.steam_credentials.logonID = Date.now();
     client.logOn(config.steam_credentials);
-    client.on("loggedOn", function(response) {
-        console.log("Logged into Steam as " + client.steamID.getSteam3RenderedID());
-    });
+    //client.on("loggedOn", function(response) {});
     client.on("error", function(error) {
         console.log(error);
     });
     client.on("accountInfo", function(name, country) {
+        console.log("Logged into Steam as \"" + name + "\" " + client.steamID.getSteam3RenderedID() + " from " + country);
         mycountry = country;
+        /* store.steam('getGenreList').then(function (results) {
+          var len = results.genres.length;
+          for (var i = 0; i < len; i++) {
+            genres.push(results.genres[i].id);
+          }
+          console.log("Status: " + (results.status ? "Success" : "Error") + " | Genres (" + genres.length + "): " + genres.join(", "));
+        }); */
+        var glen = genres.length;
+        for (var g = 0; g < glen; g++) {
+          store.steam('getAppsInGenre', genres[g]).then(function (results) {
+            var len = 0;
+            var ilen = Object.keys(results.tabs).length;
+            for (var i in results.tabs) {
+              if (!results.tabs.hasOwnProperty(i)) { continue; }
+              var elen = results.tabs[i].items.length;
+              len = len + elen;
+              for (var e = 0; e < elen; e++) {
+                var id = results.tabs[i].items[e].id;
+                requestSub(id, true);
+              }
+            }
+            console.log("Status: " + (results.status ? "Success" : "Error") + " | Found " + len + " apps in genre " + results.name);
+          });
+        }
     });
     client.on("packageUpdate", function(packageid, data) {
-        console.log("Received PICS Update for Package " + packageid);
-        console.log(JSON.stringify(data, null, 4));
+        console.log("Received PICS Update " + data.changenumber + " for Package " + packageid + " with appids: " + data.packageinfo.appids.join());
         if (!ownedPackages.includes(packageid) &&
             data.packageinfo.licensetype === 1 && // Single Purchase
             data.packageinfo.status === 0 && // Available
@@ -94,15 +123,11 @@ function steamLogin() {
             (data.packageinfo.StartTime ? data.packageinfo.StartTime < Math.round(Date.now() / 1000) : true) &&
             (data.packageinfo.DontGrantIfAppIDOwned ? !client.ownsApp(data.packageinfo.DontGrantIfAppIDOwned) : true) &&
             (data.packageinfo.RequiredAppID ? client.ownsApp(data.packageinfo.RequiredAppID) : true)) {
-            if (fodRequested <= 50) {
-                requestFreeSub(packageid);
-            } else {
-                fodQueue.push(packageid);
-            }
+                requestSub(packageid);
         }
     });
     client.on("licenses", function(licenses) {
-        console.log("Our account owns " + licenses.length + " license" + numberEnding(licenses.length));
+        console.log("Our account owns " + licenses.length + " license" + numberEnding(licenses.length) + " in " + ownedPackages.length + " cached package" + numberEnding(ownedPackages.length));
         licenses.forEach(function(license) {
             if (!ownedPackages.includes(license.package_id)) {
                 ownedPackages.push(license.package_id);
@@ -111,15 +136,24 @@ function steamLogin() {
     });
 }
 
-function requestFreeSub(packageid) {
-    console.log("Attempting to request package id " + packageid);
+function requestSub(packageid, silent=false){
+    if (client.ownsApp(packageid)) { return; }
+    if (fodRequested <= 50) {
+        requestFreeSub(packageid, silent);
+    } else {
+        fodQueue.push(packageid);
+    }
+}
+
+function requestFreeSub(packageid, silent=false) {
+    if(!silent) { console.log("Attempting to request package id " + packageid); }
     fodRequested++;
     client.requestFreeLicense(packageid, function(error, grantedPackages, grantedAppIDs) {
         if (error) {
             console.log(error)
         } else {
             if (grantedPackages.length === 0) {
-                console.log("No new packages were granted to our account");
+                if(!silent) { console.log("No new packages were granted to our account"); }
             } else {
                 console.log(grantedPackages.length + " New package" + numberEnding(grantedPackages.length) + " (" + grantedPackages.join() + ") were successfully granted to our account");
                 if (!ownedPackages.includes(packageid) && grantedPackages.includes(packageid)) {
@@ -127,7 +161,7 @@ function requestFreeSub(packageid) {
                 }
             }
             if (grantedAppIDs.length === 0) {
-                console.log("No new apps were granted to our account");
+                if(!silent) { console.log("No new apps were granted to our account"); }
             } else {
                 console.log(grantedAppIDs.length + " New app" + numberEnding(grantedAppIDs.length) + " (" + grantedAppIDs.join() + ") were successfully granted to our account");
             }
@@ -161,5 +195,5 @@ function millisecondsToStr(milliseconds) {
 }
 
 function numberEnding(number) {
-    return (number > 1) ? "s" : "";
+    return (number > 1 || number == 0) ? "s" : "";
 }
