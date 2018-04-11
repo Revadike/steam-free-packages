@@ -6,7 +6,9 @@ const SteamAuth = require('steamauth');
 const SteamUser = require('steam-user');
 const util = require('util');
 const fs = require('fsxt');
-const request = require('request-promise-any');
+const limit = require('simple-rate-limiter');
+
+const limitedRequestFreeSub = limit(requestFreeSub).to(50).per(3600000);
 
 var logStream = fs.createWriteStream('log.txt', {
   'flags': 'a'
@@ -61,20 +63,9 @@ const client = new SteamUser({
 });
 
 const owned = new Set();
-const fodQueue = []; // can't be Set since you can't pop a Set
+const busyQueue = new Set();
 let mycountry = 'US';
 
-async function runFreeSubs() {
-  const startTime = new Date().getTime();
-  const len = fodQueue.length;
-  if (len > 0) {
-    for (let i = 0; i < len && i <= 50; i++) {
-      await requestFreeSub(fodQueue.pop());
-    }
-  }
-  const endTime = new Date().getTime();
-  setTimeout(runFreeSubs, 3600000 - Math.max(0, endTime - startTime));
-}
 // no need - is ran on logon
 //setTimeout(runFreeSubs, 3600000);
 
@@ -101,7 +92,6 @@ function steamLogin() {
   client.logOn(steamCredentials);
   client.on('loggedOn', () => {
     log('Logged into Steam as ' + client.steamID.getSteam3RenderedID());
-    runFreeSubs();
   });
   client.on('error', error => {
     log(error);
@@ -109,18 +99,12 @@ function steamLogin() {
   client.on('accountInfo', (_, country) => {
     mycountry = country;
   });
-
-  // Emitted when a package that was already in our cache updates.
-  // The picsCache property is updated after this is emitted, so you can get the previous package data via picsCache.packages[packageid].
-  //
-  // according to https://github.com/DoctorMcKay/node-steam-user/blob/dbaaac411f704358ef33ef796d7e9df2d4da5282/components/apps.js#L179
-  // this *is* emitted when a new package is found so yeah
-  client.on('packageUpdate', (packageId, data) => {
-    log('Received PICS Update for Package ' + packageId);
-    log(data);
+  
+  function packageUpdate(packageId, data) {
+    log('Received PICS Update for Package', packageId);
 
     if (owned.has(packageId)) return;
-    if (fodQueue.includes(packageId)) return;
+    if (busyQueue.has(packageId)) return;
 
     const pkg = data.packageinfo;
 
@@ -133,8 +117,15 @@ function steamLogin() {
     if (pkg.DontGrantIfAppIDOwned && client.ownsApp(pkg.DontGrantIfAppIDOwned)) return;
     if (pkg.RequiredAppID && !client.ownsApp(pkg.RequiredAppID)) return;
 
-    fodQueue.push(packageId);
-  });
+    limitedRequestFreeSub(packageId);
+  }
+
+  // Emitted when a package that was already in our cache updates.
+  // The picsCache property is updated after this is emitted, so you can get the previous package data via picsCache.packages[packageid].
+  //
+  // according to https://github.com/DoctorMcKay/node-steam-user/blob/dbaaac411f704358ef33ef796d7e9df2d4da5282/components/apps.js#L179
+  // this *is* emitted when a new package is found so yeah
+  client.on('packageUpdate', packageUpdate);
 
   // Contains the license data for the packages which your Steam account owns. To see license object structure, see CMsgClientLicenseList.License.
   // Emitted on logon and when licenses change. The licenses property will be updated after this event is emitted.
@@ -143,45 +134,57 @@ function steamLogin() {
     for (let license of licenses) {
       owned.add(license.package_id);
     }
+
+    (async () => {
+      log('Begin request freepackages info');
+      const body = await fs.readFile('./Free Packages · Steam Database.html', 'utf8');
+      //const body = await request('https://steamdb.info/freepackages/');
+
+      const re       = /data-subid="([0-9]+)" data-appid="([0-9]+)"/g;
+      const reSingle = /data-subid="([0-9]+)" data-appid="([0-9]+)"/;
+      const packagesApps = unzip(body.match(re).map(e => e.match(reSingle).slice(1)));
+      client.getProductInfo(packagesApps[1].map(e => Number(e)), packagesApps[0].map(e => Number(e)), false, (apps, packages) => {
+        log('PICS update should go out now!');
+
+        console.log(Object.keys(packages));
+        Object.keys(packages).forEach(k => {
+          packageUpdate(k, packages[k]);
+        });
+
+        //setTimeout(_f, 10000);
+      });
+    })();
   });
 
-  // do stuff with picsCache???
-  /*setTimeout(async function _f() {
-    log('Begin request freepackages info');
-    const body = await request('https://steamdb.info/freepackages/');
-
-    const re       = /data-subid="([0-9]+)" data-appid="([0-9]+)"/g;
-    const reSingle = /data-subid="([0-9]+)" data-appid="([0-9]+)"/;
-    const packagesApps = unzip(body.match(re).map(e => e.match(reSingle).slice(1)));
-    client.getProductInfo(packagesApps[1], packagesApps[0], false, () => {
-      log('PICS update should go out now!');
-
-      setTimeout(_f, 10000);
-    });
-  }, 10000);*/
 }
 
 function requestFreeSub(pkg) {
-  return new Promise(resolve => {
-    log('Attempting to request package id ' + pkg);
-    client.requestFreeLicense(pkg, (error, granted, grantedAppIDs) => {
-      if (error) {
-        log(error);
+  if (busyQueue.has(pkg)) {
+    log(pkg, 'is in buffer, should\'ve failed fast, this slows down ratelimit so is a bad sign.');
+    return;
+  }
+  log('Attempting to request package id ' + pkg);
+  busyQueue.add(pkg);
+  client.requestFreeLicense(Number(pkg), (error, granted, grantedAppIDs) => {
+    log('Results for package id ' + pkg + ':');
+    if (error) {
+      log('* ', error);
+      return;
+    }
+    if (granted.length === 0) {
+      log('* No new packages were granted to our account');
+    } else {
+      log('* ' + granted.length + ' New package(s) (' + granted.join(',') + ') were successfully granted to our account');
+      for (let g of granted) {
+        owned.add(g);
       }
-      if (granted.length === 0) {
-        log('No new packages were granted to our account');
-      } else {
-        log(granted.length + ' New package(s) (' + granted.join(',') + ') were successfully granted to our account');
-        for (let g of granted) {
-          owned.add(g);
-        }
-      }
-      if (grantedAppIDs.length === 0) {
-        log('No new apps were granted to our account');
-      } else {
-        log(grantedAppIDs.length + ' New app(s) (' + grantedAppIDs.join(',') + ') were successfully granted to our account');
-      }
-      resolve();
-    });
+    }
+    if (grantedAppIDs.length === 0) {
+      log('* No new apps were granted to our account');
+    } else {
+      log('* ' + grantedAppIDs.length + ' New app(s) (' + grantedAppIDs.join(',') + ') were successfully granted to our account');
+    }
+    busyQueue.delete(pkg);
+    // done!
   });
 }

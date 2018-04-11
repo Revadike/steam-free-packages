@@ -2,6 +2,7 @@
   "dependencies": {
     "request": "^2.85.0",
     "request-promise-any": "^1.0.5",
+    "simple-rate-limiter": "^0.2.3",
     "steam-user": "^3.27.0",
     "steamauth": "^0.1.5"
   }
