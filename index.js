@@ -62,9 +62,7 @@ const client = new SteamUser({
   picsCacheAll: true
 });
 
-const owned = new Set();
 const busyQueue = new Set();
-let mycountry = 'US';
 
 // no need - is ran on logon
 //setTimeout(runFreeSubs, 3600000);
@@ -96,14 +94,11 @@ function steamLogin() {
   client.on('error', error => {
     log(error);
   });
-  client.on('accountInfo', (_, country) => {
-    mycountry = country;
-  });
   
   function packageUpdate(packageId, data) {
     log('Received PICS Update for Package', packageId);
 
-    if (owned.has(packageId)) return;
+    if (client.ownsPackage(packageId)) return;
     if (busyQueue.has(packageId)) return;
 
     const pkg = data.packageinfo;
@@ -111,7 +106,7 @@ function steamLogin() {
     if (pkg.licensetype !== 1) return; // Single Purchase
     if (pkg.status !== 0) return; // Available
     if (pkg.billingtype !== 12 && pkg.billingtype !== 0) return; // NoCost or FreeOnDemand
-    if (pkg.extended.purchaserestrictedcountries && pkg.extended.purchaserestrictedcountries.includes(mycountry)) return;
+    if (pkg.extended.purchaserestrictedcountries && pkg.extended.purchaserestrictedcountries.includes(client.accountInfo.country)) return;
     if (pkg.ExpiryTime && pkg.ExpiryTime <= secsNow()) return;
     if (pkg.StartTime && pkg.StartTime >= secsNow()) return;
     if (pkg.DontGrantIfAppIDOwned && client.ownsApp(pkg.DontGrantIfAppIDOwned)) return;
@@ -131,9 +126,6 @@ function steamLogin() {
   // Emitted on logon and when licenses change. The licenses property will be updated after this event is emitted.
   client.on('licenses', licenses => {
     log('Our account owns ' + licenses.length + ' license(s)');
-    for (let license of licenses) {
-      owned.add(license.package_id);
-    }
 
     (async () => {
       log('Begin request freepackages info');
@@ -175,9 +167,6 @@ function requestFreeSub(pkg) {
       log('* No new packages were granted to our account');
     } else {
       log('* ' + granted.length + ' New package(s) (' + granted.join(',') + ') were successfully granted to our account');
-      for (let g of granted) {
-        owned.add(g);
-      }
     }
     if (grantedAppIDs.length === 0) {
       log('* No new apps were granted to our account');
