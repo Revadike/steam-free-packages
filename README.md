@@ -1,4 +1,4 @@
-# steam-free-packages
+# deprecated
 steam-free-packages is a NodeJS application used to request any new free packages added to steam to be added to your account. It considers the rate limit of 50 requests per hour.
 
 To use steam-free-packages:
